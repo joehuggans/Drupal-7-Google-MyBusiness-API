@@ -1,0 +1,4 @@
+name = Custom Reviews
+description = A custom module to handle Google Reviews
+core = 7.x
+

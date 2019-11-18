@@ -1,0 +1,216 @@
+<?php
+
+require_once __DIR__ . '/google-api-php-client-master/vendor/autoload.php';
+
+
+/**
+ * Implements hook_menu().
+ */
+//function custom_reviews_menu() {
+//  $items['google_api_auth'] = array(
+//    'title' => 'authenticate',
+//    'page callback' => 'google_api_auth',
+//    'access callback' => TRUE,
+//  );
+//  $items['google_api_callback'] = array(
+//    'title' => 'callback',
+//    'page callback' => 'google_api_callback',
+//    'access callback' => TRUE,
+//  );
+
+//  $items['google_api_testing'] = array(
+//    'title' => 'api testing',
+//    'page callback' => 'google_api_testing',
+//    'access callback' => TRUE,
+//  );
+
+  //return $items;
+//}
+
+function getOAuthCredentialsFile() {
+  if (file_exists(__DIR__ . "/client_secret.json")) {
+    return __DIR__ . "/client_secret.json";
+  } else {
+    return FALSE;
+  }
+}
+
+/**
+ * Implements HOOk cron.
+ *
+ */
+function custom_reviews_cron() {
+  $client = new Google_Client();
+  if (!$oauth_credentials = getOAuthCredentialsFile()) {
+    drupal_set_message('Failed to load Oauth2 file','status');
+    return;
+  }
+  $client->setAuthConfig($oauth_credentials);
+  $client->setApplicationName('ACCH');
+  $client->setAccessType('offline');
+  $client->setApprovalPrompt('force');
+  $client->addScope('https://www.googleapis.com/auth/plus.business.manage');
+
+  if (file_exists(drupal_realpath('public://google_api_token.json'))) {
+    $accessToken = json_decode(file_get_contents(drupal_realpath('public://google_api_token.json')), true);
+    $client->setAccessToken($accessToken);
+    if ($client->isAccessTokenExpired()) {
+      // Request new access token
+      $client = refreshAccessToken($client);
+    }
+    $accessToken = $client->getAccessToken();
+    if (!$reviews = getReviewsList($accessToken['access_token'])) {
+      watchdog('custom_reviews', 'There was an error retrieving the Google Reviews list.', [], WATCHDOG_ERROR);
+      return;
+    }
+    reviewsUpdate($reviews);
+  } else {
+    watchdog('custom_reviews', 'Google API token missing', [], WATCHDOG_ERROR);
+  }
+}
+
+function refreshAccessToken($client) {
+  // save refresh token to some variable
+  $refreshTokenSaved = $client->getRefreshToken();
+  // update access token
+  $client->fetchAccessTokenWithRefreshToken($refreshTokenSaved);
+  // pass access token to some variable
+  $accessTokenUpdated = $client->getAccessToken();
+  // append refresh token
+  $accessTokenUpdated['refresh_token'] = $refreshTokenSaved;
+  // save to file
+  file_unmanaged_save_data(json_encode($accessTokenUpdated), 'public://google_api_token.json', FILE_EXISTS_REPLACE);
+  return $client;
+}
+
+function getReviewsList($token) {
+  $data = json_decode(file_get_contents(__DIR__ . '/AccountAndLocation.json'), true);
+  $url = 'https://mybusiness.googleapis.com/v4/accounts/'.$data['accounts'].'/locations/'.$data['locations'].'/reviews?access_token=' . $token;
+  $cURL = curl_init($url);
+  curl_setopt($cURL, CURLOPT_RETURNTRANSFER, true);
+  $result = curl_exec($cURL);
+  curl_close($cURL);
+  $result = json_decode($result, TRUE);
+  return isset($result['error']) ? FALSE : $result;
+}
+
+function reviewsUpdate($reviews) {
+
+  // First get the reviews currently on the website
+  $nodes = node_load_multiple(array(), array('type' => 'google_reviews'));
+
+  // Loop through current reviews and look for match with reviews
+  // from the API. If a match found then remove respective review from newReviews
+  // array, leaving all the new reviews to then be added to the site.
+  $newReviews = $reviews['reviews'];
+  foreach($nodes as $node) {
+    $rid = $node->field_id[LANGUAGE_NONE][0]['value'];
+    foreach ($reviews['reviews'] as $key => $review) {
+      if ($rid == $review['reviewId']) {
+        unset($newReviews[$key]);
+        break;
+      }
+    }
+  }
+  if ($newReviews < 1) {
+    return;
+  }
+  $errors = FALSE;
+  foreach($newReviews as $newReview) {
+    try {
+      $node = new stdClass();
+      $node->type = "google_reviews";
+      $node->title = $newReview['reviewer']['displayName'];
+      $node->language = LANGUAGE_NONE;
+      $node->field_comment[LANGUAGE_NONE][0]['value'] = isset($newReview['comment']) ? remove_emoji($newReview['comment']) : '';
+      $node->field_star_rating[LANGUAGE_NONE][0]['value'] = $newReview['starRating'];
+      $node->field_id[LANGUAGE_NONE][0]['value'] = $newReview['reviewId'];
+      $node->uid = 1;
+      $node = node_submit($node);
+      node_save($node);
+    }
+    catch(Exception $e) {
+      watchdog('custom_reviews', 'There was an issue processing a review with the reviewer name= ' . $newReview['reviewer']['displayName'], [], WATCHDOG_ERROR);
+    }
+  }
+
+  if (!$errors) {
+    if (count($newReviews) > 1) {
+      watchdog('custom_reviews', count($newReviews) . ' reviews were imported successfully', [], WATCHDOG_NOTICE);
+    }
+    else {
+      watchdog('custom_reviews', count($newReviews) . ' review was imported successfully', [], WATCHDOG_NOTICE);
+    }
+  }
+
+
+}
+
+function remove_emoji($string) {
+
+  // Match Emoticons
+  $regex_emoticons = '/[\x{1F600}-\x{1F64F}]/u';
+  $clear_string = preg_replace($regex_emoticons, '', $string);
+
+  // Match Miscellaneous Symbols and Pictographs
+  $regex_symbols = '/[\x{1F300}-\x{1F5FF}]/u';
+  $clear_string = preg_replace($regex_symbols, '', $clear_string);
+
+  // Match Transport And Map Symbols
+  $regex_transport = '/[\x{1F680}-\x{1F6FF}]/u';
+  $clear_string = preg_replace($regex_transport, '', $clear_string);
+
+  // Match Miscellaneous Symbols
+  $regex_misc = '/[\x{2600}-\x{26FF}]/u';
+  $clear_string = preg_replace($regex_misc, '', $clear_string);
+
+  // Match Dingbats
+  $regex_dingbats = '/[\x{2700}-\x{27BF}]/u';
+  $clear_string = preg_replace($regex_dingbats, '', $clear_string);
+
+  return $clear_string;
+}
+
+
+
+/// Use the below functions if we need to run the initial authorisation of oath2 again.
+
+/**
+ * Page callback for /google_api_auth.
+ */
+function google_api_auth() {
+  $client = new Google_Client();
+  if (!$oauth_credentials = getOAuthCredentialsFile()) {
+    drupal_set_message('Failed to load Oauth2 file','status');
+    return;
+  }
+  $client->setAuthConfig($oauth_credentials);
+  $client->setAccessType("offline");
+  $client->setApprovalPrompt("force");
+  $client->addScope('https://www.googleapis.com/auth/plus.business.manage');
+  $redirect_uri = 'https://' . $_SERVER['HTTP_HOST'] . '/google_api_callback';
+  $client->setRedirectUri($redirect_uri);
+  echo 'Authenticate here : <a href="' .
+    $auth_url = filter_var($client->createAuthUrl(), FILTER_SANITIZE_URL)
+      . '">HERE</a>';
+}
+
+/**
+ *  Page callback for /google_api_callback.
+ *  This was used for the original authentication from Google after following the
+ *  $client->createAuthUrl() link.
+ */
+function google_api_callback() {
+  if (!$oauth_credentials = getOAuthCredentialsFile()) {
+    drupal_set_message('Failed to load Oauth2 file','status');
+    return;
+  }
+  $client = new Google_Client();
+  $client->setAuthConfig($oauth_credentials);
+  $client->setAccessType("offline");
+  $redirect_uri = 'https://' . $_SERVER['HTTP_HOST'] . '/google_api_callback';
+  $client->setRedirectUri($redirect_uri);
+  $token = $client->fetchAccessTokenWithAuthCode($_GET['code']);
+
+  file_unmanaged_save_data(json_encode($token), 'public://google_api_token.json', FILE_EXISTS_REPLACE);
+}
