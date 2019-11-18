@@ -42,7 +42,7 @@ function getOAuthCredentialsFile() {
 function custom_reviews_cron() {
   $client = new Google_Client();
   if (!$oauth_credentials = getOAuthCredentialsFile()) {
-    drupal_set_message('Failed to load Oauth2 file','status');
+    watchdog('custom_reviews', 'Failed to load Oauth2 file.', [], WATCHDOG_ERROR);
     return;
   }
   $client->setAuthConfig($oauth_credentials);
