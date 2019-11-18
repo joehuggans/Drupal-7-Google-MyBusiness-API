@@ -113,6 +113,7 @@ function reviewsUpdate($reviews) {
     }
   }
   if ($newReviews < 1) {
+    watchdog('custom_reviews', 'No new reviews found in Google, no changes have been made.', [], WATCHDOG_NOTICE);
     return;
   }
   $errors = FALSE;
