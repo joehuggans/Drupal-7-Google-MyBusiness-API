@@ -23,8 +23,8 @@ require_once __DIR__ . '/google-api-php-client-master/vendor/autoload.php';
 //    'page callback' => 'google_api_testing',
 //    'access callback' => TRUE,
 //  );
-
-  //return $items;
+//
+//  return $items;
 //}
 
 function getOAuthCredentialsFile() {
@@ -116,6 +116,10 @@ function reviewsUpdate($reviews) {
     watchdog('custom_reviews', 'No new reviews found in Google, no changes have been made.', [], WATCHDOG_NOTICE);
     return;
   }
+
+  variable_set('google_reviews_average_rating', $reviews['averageRating']);
+  variable_set('google_reviews_total_review_count', $reviews['totalReviewCount']);
+
   $errors = FALSE;
   foreach($newReviews as $newReview) {
     try {
@@ -127,11 +131,17 @@ function reviewsUpdate($reviews) {
       $node->field_star_rating[LANGUAGE_NONE][0]['value'] = $newReview['starRating'];
       $node->field_id[LANGUAGE_NONE][0]['value'] = $newReview['reviewId'];
       $node->uid = 1;
+      $node->field_google_created_time[LANGUAGE_NONE][0] = [
+        'value' => strtotime($newReview['createTime']),
+        'timezone' => 'UTC',
+        'timezone_db' => 'UTC',
+      ];
       $node = node_submit($node);
       node_save($node);
     }
     catch(Exception $e) {
       watchdog('custom_reviews', 'There was an issue processing a review with the reviewer name= ' . $newReview['reviewer']['displayName'], [], WATCHDOG_ERROR);
+      $errors = TRUE;
     }
   }
 
