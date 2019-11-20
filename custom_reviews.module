@@ -40,11 +40,12 @@ function getOAuthCredentialsFile() {
  *
  */
 function custom_reviews_cron() {
-  $client = new Google_Client();
+
   if (!$oauth_credentials = getOAuthCredentialsFile()) {
     watchdog('custom_reviews', 'Failed to load Oauth2 file.', [], WATCHDOG_ERROR);
     return;
   }
+  $client = new Google_Client();
   $client->setAuthConfig($oauth_credentials);
   $client->setApplicationName('ACCH');
   $client->setAccessType('offline');
@@ -63,6 +64,7 @@ function custom_reviews_cron() {
       watchdog('custom_reviews', 'There was an error retrieving the Google Reviews list.', [], WATCHDOG_ERROR);
       return;
     }
+    $reviews = reviewsFilter($reviews);
     reviewsUpdate($reviews);
   } else {
     watchdog('custom_reviews', 'Google API token missing', [], WATCHDOG_ERROR);
@@ -127,7 +129,7 @@ function reviewsUpdate($reviews) {
       $node->type = "google_reviews";
       $node->title = $newReview['reviewer']['displayName'];
       $node->language = LANGUAGE_NONE;
-      $node->field_comment[LANGUAGE_NONE][0]['value'] = isset($newReview['comment']) ? remove_emoji($newReview['comment']) : '';
+      $node->field_comment[LANGUAGE_NONE][0]['value'] = remove_emoji($newReview['comment']);
       $node->field_star_rating[LANGUAGE_NONE][0]['value'] = $newReview['starRating'];
       $node->field_id[LANGUAGE_NONE][0]['value'] = $newReview['reviewId'];
       $node->uid = 1;
@@ -153,8 +155,15 @@ function reviewsUpdate($reviews) {
       watchdog('custom_reviews', count($newReviews) . ' review was imported successfully', [], WATCHDOG_NOTICE);
     }
   }
+}
 
-
+function reviewsFilter($reviews) {
+  foreach($reviews['reviews'] as $key => $review) {
+    if ($review['starRating'] != 'FOUR' && $review['starRating'] != 'FIVE' || !isset($review['comment'])) {
+      unset($reviews['reviews'][$key]);
+    }
+  }
+  return $reviews;
 }
 
 function remove_emoji($string) {
